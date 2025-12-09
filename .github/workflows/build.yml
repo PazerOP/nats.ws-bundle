@@ -1,8 +1,6 @@
 name: Build and Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,14 +16,34 @@ jobs:
         with:
           node-version: '22'
 
-      - run: npm ci
+      - name: Install latest nats.ws and esbuild
+        run: npm install nats.ws@latest esbuild@latest
 
-      - run: npm run build
+      - name: Get nats.ws version
+        id: version
+        run: echo "version=$(npm list nats.ws --json | jq -r '.dependencies["nats.ws"].version')" >> $GITHUB_OUTPUT
 
-      - name: Commit bundle
+      - name: Check if release exists
+        id: check
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dist/
-          git diff --staged --quiet || git commit -m "Build bundle"
-          git push
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build bundle
+        if: steps.check.outputs.exists == 'false'
+        run: npx esbuild node_modules/nats.ws/esm/nats.js --bundle --format=iife --global-name=nats --platform=browser --external:crypto --outfile=nats.bundle.js
+
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "nats.ws v${{ steps.version.outputs.version }}" \
+            --notes "Browser bundle for nats.ws v${{ steps.version.outputs.version }}" \
+            nats.bundle.js
+        env:
+          GH_TOKEN: ${{ github.token }}
